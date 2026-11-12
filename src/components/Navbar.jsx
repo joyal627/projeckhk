@@ -16,7 +16,7 @@ export function Navbar({
   setLang, 
   t, 
   notifPermission, 
-  onEnableNotifications,
+  onOpenNotificationSettings,
   onOpenHistory,
   onExportCSV,
   onResetSupplies
@@ -46,12 +46,12 @@ export function Navbar({
             <span className="btn-text">{lang === 'ml' ? 'English' : 'മലയാളം'}</span>
           </button>
 
-          {/* Notification Permission Toggle */}
+          {/* Notification & Alert Settings Popup Trigger */}
           <button 
             type="button"
             className={`btn btn-icon ${notifPermission === 'granted' ? 'btn-success' : 'btn-warning'}`}
-            onClick={onEnableNotifications}
-            title={notifPermission === 'granted' ? t.notificationsEnabled : t.enableNotifications}
+            onClick={onOpenNotificationSettings}
+            title={t.notificationSettings}
           >
             {notifPermission === 'granted' ? <BellRing size={18} /> : <Bell size={18} />}
             <span className="btn-text">
@@ -59,11 +59,11 @@ export function Navbar({
             </span>
           </button>
 
-          {/* Sound Alert Test */}
+          {/* Sound Alert Quick Test */}
           <button
             type="button"
             className="btn btn-secondary btn-icon"
-            onClick={() => playAlertSound('danger')}
+            onClick={() => playAlertSound('warning')}
             title={t.testSound}
           >
             <Volume2 size={18} />
@@ -72,7 +72,7 @@ export function Navbar({
 
           {/* History Log */}
           <button 
-            type="button"
+            type="button" 
             className="btn btn-secondary btn-icon"
             onClick={onOpenHistory}
             title={t.viewHistory}
@@ -83,7 +83,7 @@ export function Navbar({
 
           {/* Export CSV / Report */}
           <button 
-            type="button"
+            type="button" 
             className="btn btn-secondary btn-icon"
             onClick={onExportCSV}
             title={t.exportCSV}

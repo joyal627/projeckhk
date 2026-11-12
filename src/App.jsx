@@ -12,11 +12,14 @@ import { StockInModal } from './components/StockInModal';
 import { AddItemModal } from './components/AddItemModal';
 import { HistoryLogModal } from './components/HistoryLogModal';
 import { WhatsAppShareModal } from './components/WhatsAppShareModal';
+import { NotificationSettingsModal } from './components/NotificationSettingsModal';
 import './App.css';
 
 const STORAGE_KEY_ITEMS = 'hk_supplies_exact_v3';
 const STORAGE_KEY_LOGS = 'hk_supplies_logs_v3';
 const STORAGE_KEY_LANG = 'hk_supplies_lang_v3';
+const STORAGE_KEY_SOUND = 'hk_supplies_sound_v3';
+const STORAGE_KEY_NOTIF_PROMPT = 'hk_notif_prompted_v3';
 
 export default function App() {
   // Language (default to 'ml' for Malayalam)
@@ -25,6 +28,11 @@ export default function App() {
   });
 
   const t = translations[lang] || translations.en;
+
+  // Sound Alert Setting (default to true)
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    return localStorage.getItem(STORAGE_KEY_SOUND) !== 'false';
+  });
 
   // Items State
   const [items, setItems] = useState(() => {
@@ -54,6 +62,7 @@ export default function App() {
         id: 'log-1',
         timestamp: new Date().toLocaleString(),
         type: 'issue',
+        itemId: 'item-1',
         itemName: 'Bath Towel (White 70x140)',
         quantity: 5,
         unit: 'Nos',
@@ -64,6 +73,7 @@ export default function App() {
         id: 'log-2',
         timestamp: new Date().toLocaleString(),
         type: 'restock',
+        itemId: 'item-6',
         itemName: 'Dental Kit (Toothbrush + Paste)',
         quantity: 50,
         unit: 'Packets',
@@ -94,6 +104,8 @@ export default function App() {
   const [editingItem, setEditingItem] = useState(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isWhatsAppOpen, setIsWhatsAppOpen] = useState(false);
+  const [shareInitialMode, setShareInitialMode] = useState('out'); // 'out', 'low', 'all'
+  const [isNotifModalOpen, setIsNotifModalOpen] = useState(false);
 
   // Sync to local storage
   useEffect(() => {
@@ -108,12 +120,30 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY_LANG, lang);
   }, [lang]);
 
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_SOUND, soundEnabled);
+  }, [soundEnabled]);
+
+  // Initial prompt for web notifications (Settings popup) if not yet granted
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      const hasPrompted = localStorage.getItem(STORAGE_KEY_NOTIF_PROMPT);
+      if (Notification.permission === 'default' && !hasPrompted) {
+        const timer = setTimeout(() => {
+          setIsNotifModalOpen(true);
+          localStorage.setItem(STORAGE_KEY_NOTIF_PROMPT, 'true');
+        }, 1200);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, []);
+
   // Handle notification permission request
   const handleEnableNotifications = async () => {
     const res = await requestNotificationPermission();
     setNotifPermission(res);
     if (res === 'granted') {
-      playAlertSound('warning');
+      if (soundEnabled) playAlertSound('warning');
       alert(lang === 'ml' 
         ? 'സ്റ്റോക്ക് തീർന്നുപോകുമ്പോൾ നിങ്ങൾക്ക് ഫോണിലും കമ്പ്യൂട്ടറിലും നോട്ടിഫിക്കേഷൻ ലഭിക്കും!' 
         : 'Low stock notifications are now active on your device!');
@@ -151,6 +181,7 @@ export default function App() {
             id: `log-${Date.now()}`,
             timestamp: new Date().toLocaleString(),
             type: 'issue',
+            itemId: item.id,
             itemName: item.name,
             quantity,
             unit: item.unit,
@@ -159,12 +190,12 @@ export default function App() {
           };
           setLogs(prevLogs => [newLog, ...prevLogs]);
 
-          // Check if newly out of stock or low
+          // Sound and Web notification alerts
           if (newQty <= 0) {
-            playAlertSound('danger');
+            if (soundEnabled) playAlertSound('danger');
             sendLowStockNotification(updatedItem, true, lang);
           } else if (newQty <= item.minThreshold) {
-            playAlertSound('warning');
+            if (soundEnabled) playAlertSound('warning');
             sendLowStockNotification(updatedItem, false, lang);
           }
 
@@ -188,6 +219,7 @@ export default function App() {
             id: `log-${Date.now()}`,
             timestamp: new Date().toLocaleString(),
             type: 'restock',
+            itemId: item.id,
             itemName: item.name,
             quantity,
             unit: item.unit,
@@ -201,6 +233,75 @@ export default function App() {
         return item;
       });
     });
+  };
+
+  // Handle correcting / editing a historical log entry (quantity, destination, note)
+  const handleEditLog = (logId, updatedFields) => {
+    const existingLog = logs.find(l => l.id === logId);
+    if (!existingLog) return;
+
+    const oldQty = Number(existingLog.quantity) || 0;
+    const newQty = Number(updatedFields.quantity) || 0;
+
+    // Calculate stock adjustment
+    let diff = 0;
+    if (existingLog.type === 'issue') {
+      // If we previously issued 10, and now correct to 2: return 8 to stock (10 - 2 = +8)
+      // If we previously issued 2, and now correct to 10: deduct 8 from stock (2 - 10 = -8)
+      diff = oldQty - newQty;
+    } else if (existingLog.type === 'restock') {
+      // If we previously restocked 10, and now correct to 15: add 5 to stock
+      diff = newQty - oldQty;
+    }
+
+    setItems(prevItems => prevItems.map(item => {
+      const isMatch = (existingLog.itemId && item.id === existingLog.itemId) || 
+                      item.name === existingLog.itemName;
+      if (isMatch) {
+        const updatedQty = Math.max(0, item.quantity + diff);
+        return { ...item, quantity: updatedQty };
+      }
+      return item;
+    }));
+
+    setLogs(prevLogs => prevLogs.map(l => {
+      if (l.id === logId) {
+        return {
+          ...l,
+          ...updatedFields,
+          editedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+      }
+      return l;
+    }));
+  };
+
+  // Handle deleting / reverting a historical log entry (returns stock)
+  const handleDeleteLog = (logId) => {
+    const log = logs.find(l => l.id === logId);
+    if (!log) return;
+
+    const isIssue = log.type === 'issue';
+    setItems(prevItems => prevItems.map(item => {
+      const isMatch = (log.itemId && item.id === log.itemId) || item.name === log.itemName;
+      if (isMatch) {
+        // If it was an issue, revert: return stock back
+        // If it was a restock, revert: deduct that restock
+        const updatedQty = isIssue 
+          ? item.quantity + log.quantity 
+          : Math.max(0, item.quantity - log.quantity);
+        return { ...item, quantity: updatedQty };
+      }
+      return item;
+    }));
+
+    setLogs(prevLogs => prevLogs.filter(l => l.id !== logId));
+  };
+
+  // Open Out-of-stock / Requisition modal with mode
+  const handleOpenShare = (mode = 'out') => {
+    setShareInitialMode(mode);
+    setIsWhatsAppOpen(true);
   };
 
   // Export CSV Report
@@ -291,7 +392,7 @@ export default function App() {
         setLang={setLang}
         t={t}
         notifPermission={notifPermission}
-        onEnableNotifications={handleEnableNotifications}
+        onOpenNotificationSettings={() => setIsNotifModalOpen(true)}
         onOpenHistory={() => setIsHistoryOpen(true)}
         onExportCSV={handleExportCSV}
         onResetSupplies={handleResetSupplies}
@@ -304,7 +405,7 @@ export default function App() {
           t={t}
           filterMode={filterMode}
           setFilterMode={setFilterMode}
-          onOpenWhatsApp={() => setIsWhatsAppOpen(true)}
+          onOpenWhatsApp={() => handleOpenShare('out')}
         />
 
         {/* Urgent Alert Banner (when items are low or out of stock) */}
@@ -312,7 +413,7 @@ export default function App() {
           items={items}
           t={t}
           lang={lang}
-          onOpenWhatsApp={() => setIsWhatsAppOpen(true)}
+          onOpenWhatsApp={() => handleOpenShare('out')}
           onSelectItem={(item) => {
             setSearchQuery(item.name);
           }}
@@ -374,19 +475,36 @@ export default function App() {
         lang={lang}
       />
 
+      {/* History Log with Edit & Undo Stock functionality */}
       <HistoryLogModal
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         logs={logs}
         onClearHistory={handleClearHistory}
+        onEditLog={handleEditLog}
+        onDeleteLog={handleDeleteLog}
         t={t}
         lang={lang}
       />
 
+      {/* Out-of-Stock List & WhatsApp Share Modal */}
       <WhatsAppShareModal
         isOpen={isWhatsAppOpen}
         onClose={() => setIsWhatsAppOpen(false)}
         items={items}
+        initialMode={shareInitialMode}
+        t={t}
+        lang={lang}
+      />
+
+      {/* Web Notification & Audio Alert Settings Popup */}
+      <NotificationSettingsModal
+        isOpen={isNotifModalOpen}
+        onClose={() => setIsNotifModalOpen(false)}
+        notifPermission={notifPermission}
+        onEnableNotifications={handleEnableNotifications}
+        soundEnabled={soundEnabled}
+        onToggleSound={() => setSoundEnabled(prev => !prev)}
         t={t}
         lang={lang}
       />
